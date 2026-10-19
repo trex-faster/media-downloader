@@ -10,6 +10,7 @@ import android.webkit.CookieManager
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -97,9 +98,19 @@ class MainActivity : Activity() {
             }
         }
 
+        // Modo de descarga: desmarcado = todas las stories del usuario; marcado = al tocar ⬇
+        // aparece una barra para elegir UNA sola story (numeradas en el orden en que se ven).
+        val pickBox = CheckBox(this).apply {
+            text = "Elegir una sola story (al tocar ⬇ aparece la lista)"
+            isChecked = getSharedPreferences("s", MODE_PRIVATE).getBoolean("pick", false)
+            setOnCheckedChangeListener { _, checked ->
+                getSharedPreferences("s", MODE_PRIVATE).edit().putBoolean("pick", checked).apply()
+            }
+        }
+
         val help = TextView(this).apply {
             text = "Android 13+: si el servicio aparece bloqueado, ve a Ajustes → Apps → StorySaver → " +
-                "menú ⋮ → \"Permitir configuración restringida\", y luego actívalo en Accesibilidad."
+                    "menú ⋮ → \"Permitir configuración restringida\", y luego actívalo en Accesibilidad."
             textSize = 12f
         }
 
@@ -122,6 +133,7 @@ class MainActivity : Activity() {
         root.addView(status)
         root.addView(login)
         root.addView(accessibility)
+        root.addView(pickBox)
         root.addView(userInput)
         root.addView(test)
         root.addView(result)
@@ -178,6 +190,6 @@ class MainActivity : Activity() {
         val enabled = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
             ?.contains(packageName) == true
         status.text = "Sesión de Instagram: " + (if (hasSession) "guardada ✔" else "falta") +
-            "\nAccesibilidad: " + (if (enabled) "activa ✔" else "falta")
+                "\nAccesibilidad: " + (if (enabled) "activa ✔" else "falta")
     }
 }

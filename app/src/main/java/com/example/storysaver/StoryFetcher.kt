@@ -37,7 +37,13 @@ class StoryBridge(
  */
 class StoryFetcher(context: Context) {
 
-    class Media(val id: String, val url: String, val video: Boolean, val user: String)
+    class Media(
+        val id: String,
+        val url: String,
+        val video: Boolean,
+        val user: String,
+        val takenAt: Long // segundos epoch; 0 si no vino en los datos
+    )
 
     companion object {
         private const val TAG = "StorySaver"
@@ -92,7 +98,8 @@ class StoryFetcher(context: Context) {
                         id: id,
                         u: hasV ? pick(vv).url : pick(iv).url,
                         v: hasV ? 1 : 0,
-                        user: user || ''
+                        user: user || '',
+                        t: o.taken_at || o.taken_at_timestamp || 0
                       });
                     }
                     return;
@@ -217,8 +224,9 @@ class StoryFetcher(context: Context) {
     private val main = Handler(Looper.getMainLooper())
 
     // Solo hilo principal.
-    private val found = LinkedHashMap<String, Media>()   // media del usuario pedido (o sin usuario)
-    private val others = LinkedHashMap<String, Media>()  // media de otros usuarios (respaldo)
+    private val found = LinkedHashMap<String, Media>()    // media del usuario pedido
+    private val unknown = LinkedHashMap<String, Media>()  // media sin nombre de usuario en los datos
+    private val others = LinkedHashMap<String, Media>()   // media de otros usuarios (se descarta)
     private var target = ""
     private var active = false
     private var finishScheduled = false
@@ -230,7 +238,7 @@ class StoryFetcher(context: Context) {
         override fun run() {
             if (!active) return
             ticks++
-            if (found.isEmpty()) {
+            if (found.isEmpty() && unknown.isEmpty()) {
                 if (ticks == 3 || ticks == 6 || ticks == 10) {
                     view.evaluateJavascript("window.__sbScan && window.__sbScan();", null)
                 }
@@ -292,6 +300,7 @@ class StoryFetcher(context: Context) {
         finishScheduled = false
         target = username
         found.clear()
+        unknown.clear()
         others.clear()
         ticks = 0
         clicks = 0
@@ -314,10 +323,14 @@ class StoryFetcher(context: Context) {
             val id = o.optString("id")
             val url = o.optString("u")
             if (id.isEmpty() || url.isEmpty()) continue
-            val m = Media(id, url, o.optInt("v") == 1, o.optString("user"))
-            if (m.user.isEmpty() || m.user.equals(target, ignoreCase = true)) found[id] = m else others[id] = m
+            val m = Media(id, url, o.optInt("v") == 1, o.optString("user"), o.optLong("t"))
+            when {
+                m.user.isEmpty() -> unknown[id] = m
+                m.user.equals(target, ignoreCase = true) -> found[id] = m
+                else -> others[id] = m
+            }
         }
-        if (found.isNotEmpty() && !finishScheduled) {
+        if ((found.isNotEmpty() || unknown.isNotEmpty()) && !finishScheduled) {
             finishScheduled = true
             main.postDelayed(finishNow, MATCH_WINDOW_MS)
         }
@@ -331,17 +344,26 @@ class StoryFetcher(context: Context) {
         main.removeCallbacks(finishNow)
         view.loadUrl("about:blank") // corta cualquier reproducción y más requests
 
-        var list = found.values.toList()
-        var err = error
-        if (list.isEmpty() && others.isNotEmpty()) {
-            // Respaldo: llegó media pero con otro nombre de usuario (p. ej. distinto formato).
-            // Tomamos el primer usuario que llegó, que es el de la página abierta.
-            val first = others.values.first().user
-            list = others.values.filter { it.user == first }
-            Log.w(TAG, "Sin coincidencia para @$target; usando @$first")
+        val seen = others.values.groupingBy { it.user }.eachCount()
+        Log.d(TAG, "fetch @$target: propias=${found.size} sinUsuario=${unknown.size} otros=$seen")
+
+        // Filtro estricto: nunca se entrega media de otro usuario. Si los datos no traen nombres
+        // de usuario en absoluto (solo entonces) no se puede filtrar y se usa lo que llegó.
+        var list: List<Media> = when {
+            found.isNotEmpty() -> found.values.toList()
+            others.isEmpty() -> unknown.values.toList()
+            else -> emptyList()
         }
+        // Orden cronológico = orden en que se ven las stories (las más viejas primero).
+        if (list.isNotEmpty() && list.all { it.takenAt > 0 }) list = list.sortedBy { it.takenAt }
+
+        var err = error
         if (list.isEmpty() && err == null) {
-            err = "No llegaron stories de @$target (¿sin stories activas, cuenta privada que no sigues, o sesión vencida?)"
+            err = if (others.isNotEmpty()) {
+                "Instagram devolvió stories de " + seen.keys.joinToString { "@$it" } + ", ninguna de @$target"
+            } else {
+                "No llegaron stories de @$target (¿sin stories activas, cuenta privada que no sigues, o sesión vencida?)"
+            }
         }
         val cb = callback
         callback = null
