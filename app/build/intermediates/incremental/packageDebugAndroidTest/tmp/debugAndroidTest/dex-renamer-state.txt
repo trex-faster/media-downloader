@@ -1,0 +1,4 @@
+#Sun Oct 18 19:30:02 PET 2026
+base.0=C\:\\Users\\USUARIO\\Downloads\\storysaver\\storysaver\\app\\build\\intermediates\\dex\\debugAndroidTest\\mergeProjectDexDebugAndroidTest\\0\\classes.dex
+path.0=0/classes.dex
+renamed.0=classes.dex
