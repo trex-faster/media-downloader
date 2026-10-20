@@ -42,7 +42,8 @@ class StoryFetcher(context: Context) {
         val url: String,
         val video: Boolean,
         val user: String,
-        val takenAt: Long // segundos epoch; 0 si no vino en los datos
+        val takenAt: Long, // segundos epoch; 0 si no vino en los datos
+        val thumb: String = "" // miniatura pequeña (también existe en los videos); "" si no vino
     )
 
     companion object {
@@ -78,6 +79,15 @@ class StoryFetcher(context: Context) {
                 }
                 return best;
               }
+              // Miniatura: la candidata más pequeña de al menos 240 px de ancho.
+              function small(arr) {
+                var best = null, bw = 1e9;
+                for (var i = 0; i < arr.length; i++) {
+                  var w = arr[i].width || 0;
+                  if (w >= 240 && w < bw) { bw = w; best = arr[i]; }
+                }
+                return best || arr[arr.length - 1];
+              }
               function collect(root) {
                 var out = [], seen = {};
                 function walk(o, owner, depth) {
@@ -99,7 +109,8 @@ class StoryFetcher(context: Context) {
                         u: hasV ? pick(vv).url : pick(iv).url,
                         v: hasV ? 1 : 0,
                         user: user || '',
-                        t: o.taken_at || o.taken_at_timestamp || 0
+                        t: o.taken_at || o.taken_at_timestamp || 0,
+                        th: hasI ? small(iv).url : ''
                       });
                     }
                     return;
@@ -311,6 +322,11 @@ class StoryFetcher(context: Context) {
         main.postDelayed(timeout, TIMEOUT_MS)
     }
 
+    /** Aborta una lectura en curso (p. ej. el usuario pasó a otra story). El callback recibe error. */
+    fun cancel() {
+        if (active) finish("cancelado")
+    }
+
     private fun onMedia(json: String) {
         if (!active) return
         val arr = try {
@@ -323,7 +339,7 @@ class StoryFetcher(context: Context) {
             val id = o.optString("id")
             val url = o.optString("u")
             if (id.isEmpty() || url.isEmpty()) continue
-            val m = Media(id, url, o.optInt("v") == 1, o.optString("user"), o.optLong("t"))
+            val m = Media(id, url, o.optInt("v") == 1, o.optString("user"), o.optLong("t"), o.optString("th"))
             when {
                 m.user.isEmpty() -> unknown[id] = m
                 m.user.equals(target, ignoreCase = true) -> found[id] = m
