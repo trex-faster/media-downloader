@@ -38,7 +38,7 @@ object Saver {
         val uri = resolver.insert(collection, values) ?: throw Exception("No se pudo crear el archivo")
         try {
             resolver.openOutputStream(uri)!!.use { out ->
-                Ig.open(m.url).use { it.copyTo(out) }
+                Ig.open(m.url).use { it.copyTo(out, 128 * 1024) }
             }
             values.clear()
             values.put(MediaStore.MediaColumns.IS_PENDING, 0)

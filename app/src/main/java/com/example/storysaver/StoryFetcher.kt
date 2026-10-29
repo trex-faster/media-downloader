@@ -17,10 +17,15 @@ import org.json.JSONArray
 class StoryBridge(
     private val onMedia: (String) -> Unit,
     private val onNote: (String) -> Unit,
-    private val onComplete: () -> Unit
+    private val onComplete: () -> Unit,
+    private val onFail: (String) -> Unit
 ) {
     @JavascriptInterface
     fun media(json: String) = onMedia(json)
+
+    /** La vía rápida falló (HTTP 429, error de red...): pasar ya a la lenta sin esperar. */
+    @JavascriptInterface
+    fun fail(reason: String) = onFail(reason)
 
     /** La respuesta de reels_media (lista COMPLETA del usuario) ya se entregó vía [media]. */
     @JavascriptInterface
@@ -57,6 +62,13 @@ class StoryFetcher(context: Context) {
         // Tras llegar la primera media del usuario pedido, esperamos esto por si llegan más lotes.
         private const val MATCH_WINDOW_MS = 4000L
         private const val TIMEOUT_MS = 30000L
+
+        // Página liviana del mismo origen que se deja cargada entre lecturas: desde ella se llama
+        // a la API de inmediato (sin cargar el visor de stories, que tarda varios segundos).
+        private const val WARM_URL = "https://www.instagram.com/robots.txt"
+
+        // Si por la vía rápida no llega nada en este tiempo, se usa la vía lenta de siempre.
+        private const val FAST_FALLBACK_MS = 2500L
 
         // Sin ningún carácter "dólar" a propósito: esto es un raw string de Kotlin.
         private val HOOK_JS = """
@@ -95,7 +107,7 @@ class StoryFetcher(context: Context) {
                 return best || arr[arr.length - 1];
               }
               function collect(root) {
-                var out = [], seen = {};
+                var out = [], seen = {}, uids = {};
                 function walk(o, owner, depth) {
                   if (!o || typeof o !== 'object' || depth > 40) return;
                   if (Array.isArray(o)) {
@@ -103,6 +115,12 @@ class StoryFetcher(context: Context) {
                     return;
                   }
                   var user = (o.user && o.user.username) || (o.owner && o.owner.username) || owner;
+                  // Se recuerda el id numérico de cada usuario: la vía rápida lo necesita y
+                  // pedirlo a web_profile_info da HTTP 429.
+                  try {
+                    var ou = o.user || o.owner;
+                    if (ou && ou.username && (ou.pk || ou.id)) uids[String(ou.username).toLowerCase()] = String(ou.pk || ou.id);
+                  } catch (e) {}
                   var vv = o.video_versions;
                   var iv = o.image_versions2 && o.image_versions2.candidates;
                   var hasV = vv && vv.length, hasI = iv && iv.length;
@@ -140,6 +158,7 @@ class StoryFetcher(context: Context) {
                   }
                 }
                 walk(root, '', 0);
+                for (var j = 0; j < out.length; j++) out[j].uid = uids[(out[j].user || '').toLowerCase()] || '';
                 return out;
               }
               function handle(text, fn) {
@@ -218,27 +237,25 @@ class StoryFetcher(context: Context) {
         private val API_JS = """
             (function () {
               var H = { 'X-IG-App-ID': '936619743392459', 'X-Requested-With': 'XMLHttpRequest' };
+              // El id lo pone Kotlin (sale de los datos de la vía lenta). Ya NO se llama a
+              // web_profile_info: Instagram lo limita con HTTP 429.
+              var ID = '__UID__';
               function note(s) { try { StoryBridge.note(s); } catch (e) {} }
-              fetch('/api/v1/users/web_profile_info/?username=' + encodeURIComponent('__USER__'),
+              function fail(s) { note(s); try { StoryBridge.fail(s); } catch (e) {} }
+              fetch('/api/v1/feed/reels_media/?reel_ids=' + ID,
                     { credentials: 'include', headers: H })
                 .then(function (r) {
-                  if (!r.ok) note('api profile HTTP ' + r.status);
-                  return r.json();
-                })
-                .then(function (j) {
-                  var id = j && j.data && j.data.user && j.data.user.id;
-                  if (!id) { note('api: sin id de usuario'); return; }
-                  return fetch('/api/v1/feed/reels_media/?reel_ids=' + id,
-                               { credentials: 'include', headers: H })
-                    .then(function (r) { note('api reels_media HTTP ' + r.status); return r.text(); });
+                  note('api reels_media HTTP ' + r.status);
+                  if (!r.ok) { fail('reels_media HTTP ' + r.status); return null; }
+                  return r.text();
                 })
                 .then(function (t) {
-                  if (typeof t !== 'string') return;
+                  if (t === null) return;
                   // Se procesa aquí mismo (síncrono) y luego se avisa: la lista llegó completa.
                   try { if (window.__sbHandle) window.__sbHandle(t, 'api'); } catch (e) {}
                   try { StoryBridge.complete(); } catch (e) {}
                 })
-                .catch(function (e) { note('api error: ' + e); });
+                .catch(function (e) { fail('api error: ' + e); });
             })();
         """.trimIndent()
 
@@ -285,6 +302,11 @@ class StoryFetcher(context: Context) {
     }
 
     private val main = Handler(Looper.getMainLooper())
+    private val prefs = context.applicationContext.getSharedPreferences("s", Context.MODE_PRIVATE)
+
+    private fun uidKey(user: String) = "uid_" + user.lowercase()
+    private fun cachedUid(user: String): String =
+        prefs.getString(uidKey(user), null)?.takeIf { it.all(Char::isDigit) }.orEmpty()
 
     // Solo hilo principal.
     private val found = LinkedHashMap<String, Media>()    // media del usuario pedido
@@ -299,6 +321,14 @@ class StoryFetcher(context: Context) {
     private var apiAt = 0
     private var loaded = false // la página de instagram.com ya cargó (evita ejecutar JS sobre about:blank)
     private var callback: ((List<Media>, String?) -> Unit)? = null
+
+    // Vía rápida: página liviana ya cargada (warm) desde la que se llama a la API sin navegar.
+    private var warm = false          // la página liviana está cargada y lista
+    private var warming = false       // se está cargando ahora
+    private var warmDisabled = false  // la vía rápida falló repetidas veces: solo vía lenta
+    private var warmFails = 0
+    private var fast = false          // la lectura en curso intenta la vía rápida
+    private var apiSent = false
 
     private val tick = object : Runnable {
         override fun run() {
@@ -316,12 +346,7 @@ class StoryFetcher(context: Context) {
                 }
                 // La API desde dentro de la página es la vía fiable: no depende de que el visor
                 // de stories pida los datos por su cuenta (algo que falla en lecturas repetidas).
-                if (loaded && apiTries < 3 && (apiTries == 0 || ticks - apiAt >= 6)) {
-                    apiTries++
-                    apiAt = ticks
-                    val u = target.replace(Regex("[^A-Za-z0-9._]"), "")
-                    if (u.isNotEmpty()) view.evaluateJavascript(API_JS.replace("__USER__", u), null)
-                }
+                if (loaded && apiTries < 3 && (apiTries == 0 || ticks - apiAt >= 6)) sendApi()
                 if ((ticks == 12 || ticks == 20) && others.isEmpty()) {
                     view.evaluateJavascript(SCRAPE_JS, null)
                 }
@@ -331,6 +356,52 @@ class StoryFetcher(context: Context) {
     }
     private val timeout = Runnable { finish(null) }
     private val finishNow = Runnable { finish(null) }
+    private val slowFallback = Runnable { switchToSlow() }
+
+    private fun sendApi() {
+        // Sin id guardado no se llama a ninguna API (pedir el perfil da 429): solo la vía lenta.
+        val id = cachedUid(target)
+        if (id.isEmpty()) return
+        apiSent = true
+        apiTries++
+        apiAt = ticks
+        view.evaluateJavascript(API_JS.replace("__UID__", id), null)
+    }
+
+    /** La API respondió con error (429...) en la vía rápida: se pasa a la lenta ya, sin penalizar. */
+    private fun onFail(reason: String) {
+        Log.w(TAG, "vía rápida falló: $reason")
+        if (fast) switchToSlow(countFail = false)
+    }
+
+    /**
+     * Se carga el visor de stories como siempre. [countFail] = true solo si la vía rápida no
+     * contestó a tiempo; los errores explícitos (429) no cuentan para desactivarla.
+     */
+    private fun switchToSlow(countFail: Boolean = true) {
+        if (!active || found.isNotEmpty() || unknown.isNotEmpty()) return
+        Log.w(TAG, "vía rápida sin datos: se usa la lenta")
+        main.removeCallbacks(slowFallback)
+        if (countFail && ++warmFails >= 2) warmDisabled = true
+        fast = false
+        warm = false
+        warming = false
+        loaded = false
+        apiSent = false
+        apiTries = 0
+        apiAt = 0
+        ticks = 0
+        clicks = 0
+        view.stopLoading()
+        view.loadUrl("https://www.instagram.com/stories/$target/")
+    }
+
+    /** Deja cargada la página liviana para que la próxima lectura sea inmediata. */
+    fun warmUp() {
+        if (active || warm || warming || warmDisabled) return
+        warming = true
+        view.loadUrl(WARM_URL)
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     val view: WebView = WebView(context).apply {
@@ -343,7 +414,8 @@ class StoryFetcher(context: Context) {
             StoryBridge(
                 { json -> main.post { onMedia(json) } },
                 { s -> Log.d(TAG, "js: $s") },
-                { main.post { onComplete() } }
+                { main.post { onComplete() } },
+                { r -> main.post { onFail(r) } }
             ),
             "StoryBridge"
         )
@@ -356,11 +428,22 @@ class StoryFetcher(context: Context) {
         // Respaldo (idempotente): por si el WebView no soporta document-start-script.
         webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                if (url == null || !url.startsWith(WARM_URL)) warm = false
                 view?.evaluateJavascript(HOOK_JS, null)
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 view?.evaluateJavascript(HOOK_JS, null)
+                if (url != null && url.startsWith(WARM_URL)) {
+                    warm = true
+                    warming = false
+                    // Había una lectura esperando a que la página liviana cargara.
+                    if (active && fast && !apiSent) {
+                        loaded = true
+                        sendApi()
+                    }
+                    return
+                }
                 if (active && url != null && url.startsWith("https://www.instagram.com")) {
                     loaded = true
                     if (url.contains("/accounts/login")) Log.w(TAG, "sesión vencida: Instagram pidió iniciar sesión")
@@ -388,8 +471,24 @@ class StoryFetcher(context: Context) {
         loaded = false
         apiTries = 0
         apiAt = 0
-        view.stopLoading()
-        view.loadUrl("https://www.instagram.com/stories/$username/")
+        apiSent = false
+        // La vía rápida exige conocer el id numérico del usuario (se aprende en la primera lectura lenta).
+        fast = !warmDisabled && (warm || warming) && cachedUid(username).isNotEmpty()
+        when {
+            fast && warm -> {
+                // Vía rápida: la página ya está cargada, la API se pide ahora mismo.
+                loaded = true
+                sendApi()
+            }
+            fast && warming -> Unit // se lanza en onPageFinished de la página liviana
+            else -> {
+                warm = false
+                warming = false
+                view.stopLoading()
+                view.loadUrl("https://www.instagram.com/stories/$username/")
+            }
+        }
+        if (fast) main.postDelayed(slowFallback, FAST_FALLBACK_MS)
         main.postDelayed(tick, 1000)
         main.postDelayed(timeout, TIMEOUT_MS)
     }
@@ -412,6 +511,11 @@ class StoryFetcher(context: Context) {
             val url = o.optString("u")
             if (id.isEmpty() || url.isEmpty()) continue
             val m = Media(id, url, o.optInt("v") == 1, o.optString("user"), o.optLong("t"), o.optString("th"))
+            // Se guarda el id numérico para que la próxima lectura use la vía rápida.
+            val uid = o.optString("uid")
+            if (m.user.isNotEmpty() && uid.isNotEmpty() && uid.all(Char::isDigit) && prefs.getString(uidKey(m.user), null) != uid) {
+                prefs.edit().putString(uidKey(m.user), uid).apply()
+            }
             when {
                 m.user.isEmpty() -> unknown[id] = m
                 m.user.equals(target, ignoreCase = true) -> found[id] = m
@@ -427,7 +531,12 @@ class StoryFetcher(context: Context) {
     /** Llegó la lista completa del usuario por la API: no hace falta esperar más lotes. */
     private fun onComplete() {
         if (!active) return
-        if (found.isNotEmpty() || (unknown.isNotEmpty() && others.isEmpty())) finish(null)
+        if (found.isNotEmpty() || (unknown.isNotEmpty() && others.isEmpty())) {
+            finish(null)
+        } else if (fast) {
+            // La API contestó pero sin stories del usuario (id viejo, etc.): no esperar al timeout.
+            switchToSlow(countFail = false)
+        }
     }
 
     private fun finish(error: String?) {
@@ -436,7 +545,16 @@ class StoryFetcher(context: Context) {
         main.removeCallbacks(tick)
         main.removeCallbacks(timeout)
         main.removeCallbacks(finishNow)
-        view.loadUrl("about:blank") // corta cualquier reproducción y más requests
+        main.removeCallbacks(slowFallback)
+        when {
+            warm -> if (found.isNotEmpty() || unknown.isNotEmpty()) warmFails = 0 // vía rápida OK: no se navega
+            warmDisabled -> view.loadUrl("about:blank") // corta cualquier reproducción y más requests
+            else -> {
+                // Se vuelve a la página liviana: corta el visor de stories y deja lista la próxima lectura.
+                warming = true
+                view.loadUrl(WARM_URL)
+            }
+        }
 
         val seen = others.values.groupingBy { it.user }.eachCount()
         Log.d(TAG, "fetch @$target: propias=${found.size} sinUsuario=${unknown.size} otros=$seen")
@@ -470,6 +588,7 @@ class StoryFetcher(context: Context) {
         main.removeCallbacks(tick)
         main.removeCallbacks(timeout)
         main.removeCallbacks(finishNow)
+        main.removeCallbacks(slowFallback)
         view.destroy()
     }
 }

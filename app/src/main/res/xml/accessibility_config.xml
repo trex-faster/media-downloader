@@ -1,8 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Ejemplo para app/src/main/res/xml/<tu_config>.xml (el archivo que referencia tu <service> en
+  AndroidManifest.xml). NO tengo tu XML original: copia solo el atributo marcado a tu archivo.
+  Tras cambiarlo, reinstala la app y DESACTIVA y vuelve a ACTIVAR el servicio en Accesibilidad.
+-->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
-    android:accessibilityFlags="flagReportViewIds"
+    android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows"
     android:canRetrieveWindowContent="true"
-    android:notificationTimeout="200"
-    android:description="@string/service_desc" />
+    android:canTakeScreenshot="true"
+    android:notificationTimeout="100"
+    android:packageNames="com.instagram.android" />

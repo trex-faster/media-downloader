@@ -47,11 +47,12 @@ class StoryService : AccessibilityService() {
         private const val DELAY_IDLE = 700L   // feed, DMs, perfil…
 
         // Modo "current": precarga de las stories del usuario que estás viendo.
-        private const val PREFETCH_DELAY = 1500L        // solo precarga si te quedas 1,5 s en ese usuario
-        private const val PREFETCH_MIN_GAP = 8000L      // como mucho una lectura cada 8 s, aunque pases rápido
+        // Las stories duran 3-15 s: la lectura debe estar lista antes de que toques ⬇.
+        private const val PREFETCH_DELAY = 350L         // precarga en cuanto el usuario se queda un instante
+        private const val PREFETCH_MIN_GAP = 1200L      // como mucho una lectura cada 1,2 s al pasar rápido
         private const val CACHE_TTL = 5 * 60 * 1000L    // se descarta a los 5 min
-        private const val CACHE_MAX = 3                 // solo se guardan los últimos 3 usuarios
-        private const val FAIL_BACKOFF = 60_000L        // tras un fallo, no reintentar solo durante 1 min
+        private const val CACHE_MAX = 8                 // se guardan los últimos 8 usuarios
+        private const val FAIL_BACKOFF = 10_000L        // tras un fallo, no reintentar solo durante 10 s
 
         // ID de vista donde Instagram muestra el username en el visor de stories
         private val TITLE_IDS = listOf("$IG:id/reel_viewer_title")
@@ -445,6 +446,7 @@ class StoryService : AccessibilityService() {
     /** Mientras miras las stories de alguien, las lee en segundo plano para que ⬇ sea instantáneo. */
     private fun maybePrefetch(user: String?) {
         if (user == null || busy || mode() != MODE_CURRENT) return
+        ensureFetcher().warmUp() // deja cargada la página liviana: las lecturas serán casi inmediatas
         val key = user.lowercase()
         if (prefetching) {
             // Pasaste a otro usuario: se abandona la lectura anterior (su callback limpia el estado).
@@ -517,8 +519,9 @@ class StoryService : AccessibilityService() {
         }
 
         waiting = null
+        // Las miniaturas ya no se descargan aquí: la barra de progreso resuelve casi siempre y
+        // resolveCurrent las baja solo si hace falta (así no compiten por la red con la lectura).
         val c = cachePut(key, items)
-        computeSigs(c)
         if (tap != null) resolveCurrent(c, tap)
     }
 
@@ -604,11 +607,11 @@ class StoryService : AccessibilityService() {
                     }
                 } else if (!warnedShot) {
                     warnedShot = true
-                    toast("No se pudo capturar la pantalla (revisa canTakeScreenshot en la config de accesibilidad)")
+                    toast("No se pudo capturar la pantalla: activa canTakeScreenshot en la config de accesibilidad y reactiva el servicio")
                 }
                 finish(sigs, band)
             }
-        }, 60) // deja que el sistema repinte sin el botón
+        }, 40) // deja que el sistema repinte sin el botón
     }
 
     private fun resolveCurrent(c: Cached, tap: Tap) {
@@ -694,6 +697,16 @@ class StoryService : AccessibilityService() {
                     cb(null)
                 }
             })
+        } catch (e: SecurityException) {
+            // Falta android:canTakeScreenshot="true" en res/xml/<config>.xml (o el servicio no se
+            // volvió a activar tras añadirlo): sin captura no hay barra de progreso ni comparación.
+            Log.e(
+                TAG,
+                "captura BLOQUEADA (SecurityException): añade android:canTakeScreenshot=\"true\" " +
+                        "a la config de accesibilidad y reactiva el servicio en Ajustes",
+                e
+            )
+            cb(null)
         } catch (e: Exception) {
             Log.e(TAG, "takeScreenshot", e)
             cb(null)

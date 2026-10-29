@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="app_name">StorySaver</string>
-    <string name="service_desc">Lee el nombre de usuario de la story abierta en Instagram para mostrar el botón de descarga.</string>
-</resources>
