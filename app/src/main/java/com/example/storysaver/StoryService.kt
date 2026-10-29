@@ -45,6 +45,7 @@ class StoryService : AccessibilityService() {
         private const val DELAY_FAST = 150L   // cambio de ventana
         private const val DELAY_STORY = 300L  // botón visible
         private const val DELAY_IDLE = 700L   // feed, DMs, perfil…
+        private const val WATCHDOG_MS = 1000L // comprobación de "¿sigo en Instagram?" con el botón visible
 
         // Modo "current": precarga de las stories del usuario que estás viendo.
         // Las stories duran 3-15 s: la lectura debe estar lista antes de que toques ⬇.
@@ -157,13 +158,9 @@ class StoryService : AccessibilityService() {
 
         if (pkg != IG) {
             // El usuario salió de Instagram: ocultar el botón y soltar la precarga en curso.
-            if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-                username = null
-                setShown(false)
-                prefetchScheduled = null
-                main.removeCallbacks(prefetchRun)
-                if (prefetching && waiting == null) fetcher?.cancel()
-            }
+            // Se reacciona a CUALQUIER evento de otra app (algunos launchers no mandan
+            // TYPE_WINDOW_STATE_CHANGED al volver al inicio).
+            leaveInstagram()
             return
         }
 
@@ -257,7 +254,10 @@ class StoryService : AccessibilityService() {
         if (busy) return
         val root = rootInActiveWindow ?: return
         try {
-            if (root.packageName?.toString() != IG) return
+            if (root.packageName?.toString() != IG) {
+                leaveInstagram()
+                return
+            }
 
             val user = currentUser(root, false)
 
@@ -283,6 +283,34 @@ class StoryService : AccessibilityService() {
             shown = v
         } catch (e: Exception) {
             Log.e(TAG, "overlay", e)
+        }
+        main.removeCallbacks(watchdog)
+        if (shown) main.postDelayed(watchdog, WATCHDOG_MS)
+    }
+
+    /** Salió de Instagram (inicio, otra app, bloqueo...): botón fuera y precarga cancelada. */
+    private fun leaveInstagram() {
+        username = null
+        setShown(false)
+        prefetchScheduled = null
+        main.removeCallbacks(prefetchRun)
+        if (prefetching && waiting == null) fetcher?.cancel()
+    }
+
+    // Red de seguridad: mientras el botón está visible, comprueba cada segundo que la ventana
+    // activa siga siendo Instagram. Si no (o si no hay ventana activa, p. ej. pantalla bloqueada),
+    // lo oculta aunque no haya llegado ningún evento.
+    private val watchdog = object : Runnable {
+        override fun run() {
+            if (!shown) return
+            val root = rootInActiveWindow
+            val inIg = try {
+                root?.packageName?.toString() == IG
+            } finally {
+                recycle(root)
+            }
+            if (!inIg && !busy) leaveInstagram()
+            if (shown) main.postDelayed(this, WATCHDOG_MS)
         }
     }
 

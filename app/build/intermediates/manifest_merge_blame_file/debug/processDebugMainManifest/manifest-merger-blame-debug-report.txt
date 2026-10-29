@@ -20,50 +20,51 @@
 16        android:extractNativeLibs="false"
 17        android:label="@string/app_name"
 17-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:7:9-41
-18        android:theme="@android:style/Theme.DeviceDefault.Light" >
-18-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:8:9-65
-19        <activity
-19-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:10:9-17:20
-20            android:name="com.example.storysaver.MainActivity"
-20-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:11:13-41
-21            android:exported="true" >
-21-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:12:13-36
-22            <intent-filter>
-22-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:13:13-16:29
-23                <action android:name="android.intent.action.MAIN" />
-23-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:14:17-69
-23-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:14:25-66
-24
-25                <category android:name="android.intent.category.LAUNCHER" />
-25-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:15:17-77
-25-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:15:27-74
-26            </intent-filter>
-27        </activity>
-28
-29        <service
-29-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:19:9-30:19
-30            android:name="com.example.storysaver.StoryService"
-30-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:20:13-41
-31            android:exported="true"
-31-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:21:13-36
-32            android:label="@string/app_name"
-32-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:22:13-45
-33            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE" >
-33-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:23:13-79
-34            <intent-filter>
-34-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:24:13-26:29
-35                <action android:name="android.accessibilityservice.AccessibilityService" />
-35-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:25:17-92
-35-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:25:25-89
-36            </intent-filter>
-37
-38            <meta-data
-38-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:27:13-29:64
-39                android:name="android.accessibilityservice"
-39-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:28:17-60
-40                android:resource="@xml/accessibility_config" />
-40-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:29:17-61
-41        </service>
-42    </application>
-43
-44</manifest>
+18        android:testOnly="true"
+19        android:theme="@android:style/Theme.DeviceDefault.Light" >
+19-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:8:9-65
+20        <activity
+20-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:10:9-17:20
+21            android:name="com.example.storysaver.MainActivity"
+21-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:11:13-41
+22            android:exported="true" >
+22-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:12:13-36
+23            <intent-filter>
+23-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:13:13-16:29
+24                <action android:name="android.intent.action.MAIN" />
+24-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:14:17-69
+24-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:14:25-66
+25
+26                <category android:name="android.intent.category.LAUNCHER" />
+26-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:15:17-77
+26-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:15:27-74
+27            </intent-filter>
+28        </activity>
+29
+30        <service
+30-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:19:9-30:19
+31            android:name="com.example.storysaver.StoryService"
+31-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:20:13-41
+32            android:exported="true"
+32-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:21:13-36
+33            android:label="@string/app_name"
+33-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:22:13-45
+34            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE" >
+34-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:23:13-79
+35            <intent-filter>
+35-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:24:13-26:29
+36                <action android:name="android.accessibilityservice.AccessibilityService" />
+36-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:25:17-92
+36-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:25:25-89
+37            </intent-filter>
+38
+39            <meta-data
+39-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:27:13-29:64
+40                android:name="android.accessibilityservice"
+40-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:28:17-60
+41                android:resource="@xml/accessibility_config" />
+41-->C:\Users\USUARIO\Downloads\storysaver\storysaver\app\src\main\AndroidManifest.xml:29:17-61
+42        </service>
+43    </application>
+44
+45</manifest>
