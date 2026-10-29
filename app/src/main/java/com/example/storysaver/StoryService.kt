@@ -83,7 +83,7 @@ class StoryService : AccessibilityService() {
     private val prefs by lazy { getSharedPreferences("s", MODE_PRIVATE) }
 
     private lateinit var wm: WindowManager
-    private lateinit var button: TextView
+    private lateinit var button: RingButton
     private lateinit var params: WindowManager.LayoutParams
     private var fetcher: StoryFetcher? = null
 
@@ -122,7 +122,7 @@ class StoryService : AccessibilityService() {
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
         val dp = resources.displayMetrics.density
 
-        button = TextView(this).apply {
+        button = RingButton(this).apply {
             text = "⬇"
             textSize = 22f
             setTextColor(Color.WHITE)
@@ -383,7 +383,7 @@ class StoryService : AccessibilityService() {
         }
 
         busy = true
-        button.text = "…"
+        button.spinner()
 
         if (mode == MODE_CURRENT) {
             downloadCurrent(Tap(user, age, top))
@@ -430,13 +430,22 @@ class StoryService : AccessibilityService() {
     }
 
     private fun saveAll(user: String, items: List<StoryFetcher.Media>) {
-        button.text = "…"
+        button.spinner()
         io.execute {
             try {
                 var saved = 0
                 var skipped = 0
-                for (m in items) {
-                    if (Saver.save(this@StoryService, m, user)) saved++ else skipped++
+                var lastPct = -1
+                for ((i, m) in items.withIndex()) {
+                    // Progreso total = archivos ya guardados + avance del actual.
+                    val ok = Saver.save(this@StoryService, m, user) { f ->
+                        val pct = (((i + f) / items.size) * 100).toInt()
+                        if (pct != lastPct) {
+                            lastPct = pct
+                            main.post { if (busy) button.progress(pct / 100f) }
+                        }
+                    }
+                    if (ok) saved++ else skipped++
                 }
                 toast("@${items.first().user.ifEmpty { user }}: $saved guardadas, $skipped ya estaban")
                 done("✔")
@@ -845,7 +854,7 @@ class StoryService : AccessibilityService() {
             wm.addView(panel, p)
             pickerView = panel
             main.postDelayed(pickerTimeout, 30000)
-            button.text = "?"
+            button.reset("?")
         } catch (e: Exception) {
             Log.e(TAG, "showPicker", e)
             pickCallback = null
@@ -878,8 +887,8 @@ class StoryService : AccessibilityService() {
     // notificaciones de la app están desactivadas (en logcat sale "Suppressing toast").
     private fun done(label: String) {
         main.post {
-            button.text = label
-            main.postDelayed({ button.text = "⬇" }, 2500)
+            button.reset(label)
+            main.postDelayed({ if (!busy) button.reset("⬇") }, 2500)
         }
     }
 

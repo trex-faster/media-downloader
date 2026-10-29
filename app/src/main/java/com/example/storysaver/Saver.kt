@@ -9,7 +9,12 @@ import android.provider.MediaStore
 object Saver {
 
     /** @return true si guardó el archivo, false si ya existía (no duplica al repetir). */
-    fun save(ctx: Context, m: StoryFetcher.Media, fallbackUser: String): Boolean {
+    fun save(
+        ctx: Context,
+        m: StoryFetcher.Media,
+        fallbackUser: String,
+        onProgress: ((Float) -> Unit)? = null
+    ): Boolean {
         val user = m.user.ifEmpty { fallbackUser }
         val safe = "${user}_${m.id}".replace(Regex("[^A-Za-z0-9._-]"), "_")
         val name = safe + if (m.video) ".mp4" else ".jpg"
@@ -38,7 +43,25 @@ object Saver {
         val uri = resolver.insert(collection, values) ?: throw Exception("No se pudo crear el archivo")
         try {
             resolver.openOutputStream(uri)!!.use { out ->
-                Ig.open(m.url).use { it.copyTo(out, 128 * 1024) }
+                val src = Ig.openSized(m.url)
+                src.stream.use { input ->
+                    val buf = ByteArray(64 * 1024)
+                    var done = 0L
+                    var lastPct = -1
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        out.write(buf, 0, n)
+                        done += n
+                        if (src.length > 0 && onProgress != null) {
+                            val pct = (done * 100 / src.length).toInt().coerceAtMost(100)
+                            if (pct != lastPct) {
+                                lastPct = pct
+                                onProgress(pct / 100f)
+                            }
+                        }
+                    }
+                }
             }
             values.clear()
             values.put(MediaStore.MediaColumns.IS_PENDING, 0)
