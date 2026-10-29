@@ -102,9 +102,9 @@
                     "from": {
                         "startLines": "2,3",
                         "startColumns": "4,4",
-                        "startOffsets": "55,103",
+                        "startOffsets": "57,106",
                         "endColumns": "47,133",
-                        "endOffsets": "98,232"
+                        "endOffsets": "100,235"
                     },
                     "to": {
                         "startLines": "77,78",

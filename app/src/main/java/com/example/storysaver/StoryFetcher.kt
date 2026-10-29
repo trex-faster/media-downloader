@@ -58,6 +58,7 @@ class StoryFetcher(context: Context) {
             (function () {
               if (window.__sbHook) return;
               window.__sbHook = true;
+              window.__sbDiag = 0;
               var BAD = /AdsPool|Ads[A-Z]|Seen|Badge|Promotion|Notification/;
 
               function want(u) {
@@ -100,8 +101,22 @@ class StoryFetcher(context: Context) {
                   var vv = o.video_versions;
                   var iv = o.image_versions2 && o.image_versions2.candidates;
                   var hasV = vv && vv.length, hasI = iv && iv.length;
+                  // Diagnóstico: stories que son un reel/post compartido.
+                  if ((o.story_feed_media || o.reel_share || o.clips_metadata) && window.__sbDiag < 6) {
+                    window.__sbDiag++;
+                    try {
+                      StoryBridge.note('compartida: keys=' + Object.keys(o).join(',') +
+                        ' video=' + (hasV ? 1 : 0) + ' img=' + (hasI ? 1 : 0) +
+                        ' mt=' + o.media_type + ' pk=' + (o.pk || o.id));
+                    } catch (e) {}
+                  }
                   if (hasV || hasI) {
-                    var id = String(o.pk || o.id || '');
+                    var id = String(o.pk || o.id || o.media_id || o.strong_id__ || '');
+                    if (!id && user) {
+                      // Sin id (p. ej. stories que son un reel compartido): se deriva de la URL.
+                      var su = String((hasV ? vv[0] : iv[0]).url || '');
+                      id = su ? 'u' + su.split('?')[0].split('/').pop() : '';
+                    }
                     if (id && !seen[id]) {
                       seen[id] = 1;
                       out.push({
@@ -190,6 +205,30 @@ class StoryFetcher(context: Context) {
             })();
         """.trimIndent()
 
+        // Respaldo: si el sitio no mostró stories por su cuenta (p. ej. stories que son un reel
+        // compartido), pide las del usuario desde DENTRO de la página (usa la sesión del WebView).
+        // El hook de fetch de arriba captura la respuesta igual que las demás.
+        private val API_JS = """
+            (function () {
+              var H = { 'X-IG-App-ID': '936619743392459', 'X-Requested-With': 'XMLHttpRequest' };
+              function note(s) { try { StoryBridge.note(s); } catch (e) {} }
+              fetch('/api/v1/users/web_profile_info/?username=' + encodeURIComponent('__USER__'),
+                    { credentials: 'include', headers: H })
+                .then(function (r) {
+                  if (!r.ok) note('api profile HTTP ' + r.status);
+                  return r.json();
+                })
+                .then(function (j) {
+                  var id = j && j.data && j.data.user && j.data.user.id;
+                  if (!id) { note('api: sin id de usuario'); return; }
+                  return fetch('/api/v1/feed/reels_media/?reel_ids=' + id,
+                               { credentials: 'include', headers: H })
+                    .then(function (r) { note('api reels_media HTTP ' + r.status); return r.text(); });
+                })
+                .catch(function (e) { note('api error: ' + e); });
+            })();
+        """.trimIndent()
+
         // Pulsa botones tipo "Ver historia" si Instagram muestra una pantalla intermedia.
         private val CLICK_JS = """
             (function () {
@@ -243,6 +282,9 @@ class StoryFetcher(context: Context) {
     private var finishScheduled = false
     private var ticks = 0
     private var clicks = 0
+    private var apiTries = 0
+    private var apiAt = 0
+    private var loaded = false // la página de instagram.com ya cargó (evita ejecutar JS sobre about:blank)
     private var callback: ((List<Media>, String?) -> Unit)? = null
 
     private val tick = object : Runnable {
@@ -258,6 +300,14 @@ class StoryFetcher(context: Context) {
                     view.evaluateJavascript(CLICK_JS) { r ->
                         if (r != null && r != "\"\"" && r != "null") Log.d(TAG, "auto-click: $r")
                     }
+                }
+                // La API desde dentro de la página es la vía fiable: no depende de que el visor
+                // de stories pida los datos por su cuenta (algo que falla en lecturas repetidas).
+                if (loaded && apiTries < 3 && (apiTries == 0 || ticks - apiAt >= 6)) {
+                    apiTries++
+                    apiAt = ticks
+                    val u = target.replace(Regex("[^A-Za-z0-9._]"), "")
+                    if (u.isNotEmpty()) view.evaluateJavascript(API_JS.replace("__USER__", u), null)
                 }
                 if ((ticks == 12 || ticks == 20) && others.isEmpty()) {
                     view.evaluateJavascript(SCRAPE_JS, null)
@@ -297,6 +347,10 @@ class StoryFetcher(context: Context) {
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 view?.evaluateJavascript(HOOK_JS, null)
+                if (active && url != null && url.startsWith("https://www.instagram.com")) {
+                    loaded = true
+                    if (url.contains("/accounts/login")) Log.w(TAG, "sesión vencida: Instagram pidió iniciar sesión")
+                }
             }
         }
     }
@@ -317,6 +371,10 @@ class StoryFetcher(context: Context) {
         clicks = 0
         callback = done
 
+        loaded = false
+        apiTries = 0
+        apiAt = 0
+        view.stopLoading()
         view.loadUrl("https://www.instagram.com/stories/$username/")
         main.postDelayed(tick, 1000)
         main.postDelayed(timeout, TIMEOUT_MS)
@@ -378,7 +436,7 @@ class StoryFetcher(context: Context) {
             err = if (others.isNotEmpty()) {
                 "Instagram devolvió stories de " + seen.keys.joinToString { "@$it" } + ", ninguna de @$target"
             } else {
-                "No llegaron stories de @$target (¿sin stories activas, cuenta privada que no sigues, o sesión vencida?)"
+                "No llegaron stories de @$target (sin stories activas, cuenta privada que no sigues o sesión vencida). Revisa Logcat con filtro StorySaver"
             }
         }
         val cb = callback
