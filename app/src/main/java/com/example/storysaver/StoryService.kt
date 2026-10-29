@@ -47,9 +47,10 @@ class StoryService : AccessibilityService() {
         private const val DELAY_IDLE = 700L   // feed, DMs, perfil…
 
         // Modo "current": precarga de las stories del usuario que estás viendo.
-        private const val PREFETCH_DELAY = 1200L        // espera a que te quedes en ese usuario
-        private const val CACHE_TTL = 10 * 60 * 1000L   // las URLs firmadas duran, pero no abusamos
-        private const val CACHE_MAX = 6
+        private const val PREFETCH_DELAY = 3000L        // solo precarga si te quedas 3 s en ese usuario
+        private const val PREFETCH_MIN_GAP = 8000L      // como mucho una lectura cada 8 s, aunque pases rápido
+        private const val CACHE_TTL = 5 * 60 * 1000L    // se descarta a los 5 min
+        private const val CACHE_MAX = 3                 // solo se guardan los últimos 3 usuarios
         private const val FAIL_BACKOFF = 60_000L        // tras un fallo, no reintentar solo durante 1 min
 
         // ID de vista donde Instagram muestra el username en el visor de stories
@@ -92,6 +93,7 @@ class StoryService : AccessibilityService() {
     private var prefetching = false
     private var prefetchingUser: String? = null
     private var prefetchScheduled: String? = null
+    private var lastPrefetchAt = 0L
     private var waiting: Tap? = null
     private val prefetchRun = Runnable { startScheduledPrefetch() }
 
@@ -422,7 +424,9 @@ class StoryService : AccessibilityService() {
     }
 
     private fun cachePut(key: String, items: List<StoryFetcher.Media>): Cached {
-        val c = Cached(items, System.currentTimeMillis())
+        val now = System.currentTimeMillis()
+        val c = Cached(items, now)
+        cache.entries.removeAll { now - it.value.at > CACHE_TTL }
         cache.remove(key)
         cache[key] = c
         while (cache.size > CACHE_MAX) cache.remove(cache.keys.first())
@@ -452,10 +456,19 @@ class StoryService : AccessibilityService() {
         if (busy || prefetching) return
         val user = username ?: return
         if (user.lowercase() != key) return
+
+        // Pasando rápido de usuario en usuario: se espera para no encadenar lecturas.
+        val wait = PREFETCH_MIN_GAP - (System.currentTimeMillis() - lastPrefetchAt)
+        if (wait > 0) {
+            prefetchScheduled = key
+            main.postDelayed(prefetchRun, wait)
+            return
+        }
         startPrefetch(user)
     }
 
     private fun startPrefetch(user: String) {
+        lastPrefetchAt = System.currentTimeMillis()
         prefetching = true
         prefetchingUser = user.lowercase()
         val f = ensureFetcher()

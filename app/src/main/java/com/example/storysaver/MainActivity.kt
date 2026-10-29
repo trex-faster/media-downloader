@@ -10,10 +10,11 @@ import android.webkit.CookieManager
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
-import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import android.widget.TextView
 
 class MainActivity : Activity() {
@@ -98,14 +99,32 @@ class MainActivity : Activity() {
             }
         }
 
-        // Modo de descarga: desmarcado = todas las stories del usuario; marcado = al tocar ⬇
-        // aparece una barra para elegir UNA sola story (numeradas en el orden en que se ven).
-        val pickBox = CheckBox(this).apply {
-            text = "Elegir una sola story (al tocar ⬇ aparece la lista)"
-            isChecked = getSharedPreferences("s", MODE_PRIVATE).getBoolean("pick", false)
-            setOnCheckedChangeListener { _, checked ->
-                getSharedPreferences("s", MODE_PRIVATE).edit().putBoolean("pick", checked).apply()
+        // Modo de descarga (se guarda en prefs "mode"):
+        //  all     = al tocar ⬇ se guardan todas las stories del usuario
+        //  pick    = al tocar ⬇ aparece una barra para elegir UNA story (numeradas en orden)
+        //  current = se guarda al instante la story que estás viendo (precarga en segundo plano)
+        val prefs = getSharedPreferences("s", MODE_PRIVATE)
+        val saved = prefs.getString("mode", null)
+            ?: if (prefs.getBoolean("pick", false)) "pick" else "all"
+
+        val modes = listOf(
+            "all" to "Todas las stories del usuario",
+            "pick" to "Elegir una sola (aparece la lista al tocar ⬇)",
+            "current" to "La que estoy viendo (casi instantáneo)"
+        )
+        val modeGroup = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
+        val ids = HashMap<Int, String>()
+        for ((key, label) in modes) {
+            val rb = RadioButton(this).apply {
+                id = View.generateViewId()
+                text = label
+                isChecked = key == saved
             }
+            ids[rb.id] = key
+            modeGroup.addView(rb)
+        }
+        modeGroup.setOnCheckedChangeListener { _, checkedId ->
+            ids[checkedId]?.let { prefs.edit().putString("mode", it).apply() }
         }
 
         val help = TextView(this).apply {
@@ -133,7 +152,7 @@ class MainActivity : Activity() {
         root.addView(status)
         root.addView(login)
         root.addView(accessibility)
-        root.addView(pickBox)
+        root.addView(modeGroup)
         root.addView(userInput)
         root.addView(test)
         root.addView(result)
