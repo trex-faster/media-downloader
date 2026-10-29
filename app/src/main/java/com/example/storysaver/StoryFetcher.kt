@@ -16,10 +16,15 @@ import org.json.JSONArray
 /** Puente JS → Kotlin. Debe ser una clase pública: WebView la invoca por reflexión. */
 class StoryBridge(
     private val onMedia: (String) -> Unit,
-    private val onNote: (String) -> Unit
+    private val onNote: (String) -> Unit,
+    private val onComplete: () -> Unit
 ) {
     @JavascriptInterface
     fun media(json: String) = onMedia(json)
+
+    /** La respuesta de reels_media (lista COMPLETA del usuario) ya se entregó vía [media]. */
+    @JavascriptInterface
+    fun complete() = onComplete()
 
     @JavascriptInterface
     fun note(s: String) = onNote(s)
@@ -149,6 +154,8 @@ class StoryFetcher(context: Context) {
                 }
               }
 
+              window.__sbHandle = handle;
+
               // En una carga directa de /stories/usuario/ Instagram puede traer los datos ya
               // incrustados en el HTML (sin request de red): los leemos de los <script> JSON.
               window.__sbScan = function () {
@@ -224,6 +231,12 @@ class StoryFetcher(context: Context) {
                   return fetch('/api/v1/feed/reels_media/?reel_ids=' + id,
                                { credentials: 'include', headers: H })
                     .then(function (r) { note('api reels_media HTTP ' + r.status); return r.text(); });
+                })
+                .then(function (t) {
+                  if (typeof t !== 'string') return;
+                  // Se procesa aquí mismo (síncrono) y luego se avisa: la lista llegó completa.
+                  try { if (window.__sbHandle) window.__sbHandle(t, 'api'); } catch (e) {}
+                  try { StoryBridge.complete(); } catch (e) {}
                 })
                 .catch(function (e) { note('api error: ' + e); });
             })();
@@ -329,7 +342,8 @@ class StoryFetcher(context: Context) {
         addJavascriptInterface(
             StoryBridge(
                 { json -> main.post { onMedia(json) } },
-                { s -> Log.d(TAG, "js: $s") }
+                { s -> Log.d(TAG, "js: $s") },
+                { main.post { onComplete() } }
             ),
             "StoryBridge"
         )
@@ -408,6 +422,12 @@ class StoryFetcher(context: Context) {
             finishScheduled = true
             main.postDelayed(finishNow, MATCH_WINDOW_MS)
         }
+    }
+
+    /** Llegó la lista completa del usuario por la API: no hace falta esperar más lotes. */
+    private fun onComplete() {
+        if (!active) return
+        if (found.isNotEmpty() || (unknown.isNotEmpty() && others.isEmpty())) finish(null)
     }
 
     private fun finish(error: String?) {

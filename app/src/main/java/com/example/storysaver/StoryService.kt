@@ -47,7 +47,7 @@ class StoryService : AccessibilityService() {
         private const val DELAY_IDLE = 700L   // feed, DMs, perfil…
 
         // Modo "current": precarga de las stories del usuario que estás viendo.
-        private const val PREFETCH_DELAY = 3000L        // solo precarga si te quedas 3 s en ese usuario
+        private const val PREFETCH_DELAY = 1500L        // solo precarga si te quedas 1,5 s en ese usuario
         private const val PREFETCH_MIN_GAP = 8000L      // como mucho una lectura cada 8 s, aunque pases rápido
         private const val CACHE_TTL = 5 * 60 * 1000L    // se descarta a los 5 min
         private const val CACHE_MAX = 3                 // solo se guardan los últimos 3 usuarios
@@ -60,7 +60,14 @@ class StoryService : AccessibilityService() {
     }
 
     /** Lo que se sabe en el instante de tocar ⬇ (el visor puede cambiar justo después). */
-    private class Tap(val user: String, val age: LongRange?, val titleTop: Int)
+    private class Tap(val user: String, val age: LongRange?, val titleTop: Int) {
+        /** Firmas de la pantalla CONGELADA en el instante del toque (null si no se pudo capturar). */
+        var sigs: List<FloatArray>? = null
+
+        /** Franja superior de la pantalla congelada (barra de progreso de segmentos). */
+        var band: CurrentStory.Band? = null
+        var retried = false
+    }
 
     /** Stories de un usuario ya leídas + firmas de sus miniaturas (para reconocer cuál se ve). */
     private class Cached(val items: List<StoryFetcher.Media>, val at: Long) {
@@ -103,6 +110,8 @@ class StoryService : AccessibilityService() {
 
     @Volatile
     private var busy = false
+
+    private var warnedShot = false
 
     private fun mode(): String =
         prefs.getString("mode", null) ?: if (prefs.getBoolean("pick", false)) MODE_PICK else MODE_ALL
@@ -488,12 +497,18 @@ class StoryService : AccessibilityService() {
             startPrefetch(tap.user)
             return
         }
-        waiting = null
 
         if (err != null || items.isEmpty()) {
             if (err != "cancelado") failUntil[key] = System.currentTimeMillis() + FAIL_BACKOFF
             Log.w(TAG, "precarga @$user: $err")
             if (tap != null) {
+                // El toque no se pierde por un fallo puntual de red/Instagram: un reintento.
+                if (err != "cancelado" && !tap.retried) {
+                    tap.retried = true
+                    startPrefetch(user) // waiting sigue apuntando al toque
+                    return
+                }
+                waiting = null
                 toast(err ?: "Sin stories")
                 done("✖")
                 busy = false
@@ -501,6 +516,7 @@ class StoryService : AccessibilityService() {
             return
         }
 
+        waiting = null
         val c = cachePut(key, items)
         computeSigs(c)
         if (tap != null) resolveCurrent(c, tap)
@@ -516,55 +532,136 @@ class StoryService : AccessibilityService() {
         }
     }
 
+    /** Stories que encajan con la edad que mostraba el visor (si no encaja ninguna, todas). */
+    private fun candidates(items: List<StoryFetcher.Media>, tap: Tap): List<StoryFetcher.Media> {
+        val range = tap.age ?: return items
+        val nowSec = System.currentTimeMillis() / 1000
+        val f = items.filter { CurrentStory.ageMatches(it, range, nowSec) }
+        return if (f.isEmpty()) items else f
+    }
+
     private fun downloadCurrent(tap: Tap) {
         val key = tap.user.lowercase()
-        val c = cacheGet(key)
-        if (c != null) {
-            resolveCurrent(c, tap)
-            return
+
+        // Camino instantáneo: precarga lista y la edad deja una sola story -> sin captura.
+        cacheGet(key)?.let { c ->
+            val cands = candidates(c.items, tap)
+            if (cands.size == 1) {
+                saveAll(tap.user, cands)
+                return
+            }
         }
-        // Sin precarga lista: se espera a la que está en curso, o se lanza ahora.
-        toast("Leyendo stories de @${tap.user}…")
-        waiting = tap
-        if (!prefetching) {
-            startPrefetch(tap.user)
-        } else if (prefetchingUser != key) {
-            fetcher?.cancel() // su callback arranca la lectura de este usuario
+
+        // Puede haber varias candidatas (o aún no hay datos): se CONGELA la pantalla ya, antes de
+        // esperar nada, porque la story sigue avanzando mientras llegan los datos.
+        freezeScreen(tap) {
+            val c = cacheGet(key)
+            if (c != null) {
+                resolveCurrent(c, tap)
+            } else {
+                // Sin precarga lista: se espera a la que está en curso, o se lanza ahora.
+                toast("Leyendo stories de @${tap.user}…")
+                waiting = tap
+                if (!prefetching) {
+                    startPrefetch(tap.user)
+                } else if (prefetchingUser != key) {
+                    fetcher?.cancel() // su callback arranca la lectura de este usuario
+                }
+            }
         }
+    }
+
+    /**
+     * Captura la pantalla justo ahora (con nuestro botón oculto para que no ensucie la imagen),
+     * guarda sus firmas en [tap] y continúa con [next] en el hilo principal.
+     * Nunca se queda colgado: si la captura falla o tarda, continúa sin firmas.
+     */
+    private fun freezeScreen(tap: Tap, next: () -> Unit) {
+        val once = java.util.concurrent.atomic.AtomicBoolean(false)
+        fun finish(sigs: List<FloatArray>?, band: CurrentStory.Band?) {
+            if (!once.compareAndSet(false, true)) return
+            main.post {
+                button.alpha = 1f
+                tap.sigs = sigs
+                tap.band = band
+                next()
+            }
+        }
+        button.alpha = 0f
+        main.postDelayed({ finish(null, null) }, 2500) // tope de seguridad
+        main.postDelayed({
+            grabScreen { shot ->
+                var sigs: List<FloatArray>? = null
+                var band: CurrentStory.Band? = null
+                if (shot != null) {
+                    try {
+                        band = CurrentStory.readBand(shot, tap.titleTop)
+                        sigs = CurrentStory.screenSignatures(shot, tap.titleTop)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "firma de pantalla", e)
+                    } finally {
+                        shot.recycle()
+                    }
+                } else if (!warnedShot) {
+                    warnedShot = true
+                    toast("No se pudo capturar la pantalla (revisa canTakeScreenshot en la config de accesibilidad)")
+                }
+                finish(sigs, band)
+            }
+        }, 60) // deja que el sistema repinte sin el botón
     }
 
     private fun resolveCurrent(c: Cached, tap: Tap) {
         val items = c.items
-        val nowSec = System.currentTimeMillis() / 1000
-        var cands = tap.age?.let { range -> items.filter { CurrentStory.ageMatches(it, range, nowSec) } } ?: items
-        if (cands.isEmpty()) cands = items
+        val cands = candidates(items, tap)
 
         if (cands.size == 1) {
             saveAll(tap.user, cands)
             return
         }
 
-        // Varias candidatas (p. ej. todas "8h"): se compara la pantalla con sus miniaturas.
-        grabScreen { shot ->
+        // Varias candidatas (p. ej. todas "8h"). Se decide con la pantalla congelada, nunca "todas":
+        //  1) barra de progreso (qué segmento va llenándose) -> índice exacto, sin comparar imágenes
+        //  2) si no se lee, parecido con las miniaturas
+        val frames = tap.sigs
+        val band = tap.band
+        pre.execute {
+            val idx = try {
+                band?.let { CurrentStory.barIndex(it, items.size) } ?: -1
+            } catch (e: Exception) {
+                Log.e(TAG, "barra", e)
+                -1
+            }
+            Log.d(TAG, "barra: idx=$idx de ${items.size}, candidatas por edad=${cands.size}")
+            if (idx in items.indices) {
+                main.post { saveAll(tap.user, listOf(items[idx])) }
+                return@execute
+            }
+
             var match: CurrentStory.Match? = null
-            if (shot != null) {
+            if (!frames.isNullOrEmpty()) {
                 try {
-                    val sig = CurrentStory.screenSignature(shot, tap.titleTop)
-                    match = CurrentStory.match(cands, c.sigs, sig)
+                    // Miniaturas que aún no se habían calculado (o fallaron): se reintentan ahora.
+                    for (m in cands) {
+                        if (c.sigs[m.id] == null) {
+                            CurrentStory.thumbSignature(m.thumb)?.let { c.sigs[m.id] = it }
+                        }
+                    }
+                    match = CurrentStory.match(cands, c.sigs, frames)
                     Log.d(TAG, "reconocer: candidatas=${cands.size} mejor=${match?.best?.id} seguro=${match?.confident}")
                 } catch (e: Exception) {
                     Log.e(TAG, "reconocer", e)
-                } finally {
-                    shot.recycle()
                 }
             }
             val m = match
             main.post {
-                when {
-                    m != null && m.confident -> saveAll(tap.user, listOf(m.best))
-                    // No hay certeza: se pregunta, pero solo entre las más probables.
-                    m != null -> askWhich(tap.user, items, m.ranked.take(3).sortedBy { items.indexOf(it) })
-                    else -> askWhich(tap.user, items, cands)
+                if (m != null) {
+                    // Siempre UNA sola story: la más parecida. Si hay duda, se avisa cuál fue.
+                    if (!m.confident) toast("Guardada la ${items.indexOf(m.best) + 1} de ${items.size} (la más probable)")
+                    saveAll(tap.user, listOf(m.best))
+                } else {
+                    // Sin ninguna pista (ni barra ni captura): único caso en que se pregunta.
+                    askWhich(tap.user, items, cands)
                 }
             }
         }
